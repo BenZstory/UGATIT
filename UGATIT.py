@@ -2,12 +2,14 @@ from ops import *
 from utils import *
 from glob import glob
 import time
+import shutil
 from tensorflow.contrib.data import prefetch_to_device, shuffle_and_repeat, map_and_batch
 import numpy as np
 
 class UGATIT(object) :
     def __init__(self, sess, args):
         self.light = args.light
+        self.args_dict = vars(args)
 
         if self.light :
             self.model_name = 'UGATIT_light'
@@ -16,9 +18,6 @@ class UGATIT(object) :
 
         self.sess = sess
         self.phase = args.phase
-        self.checkpoint_dir = args.checkpoint_dir
-        self.result_dir = args.result_dir
-        self.log_dir = args.log_dir
         self.dataset_name = args.dataset
         self.augment_flag = args.augment_flag
 
@@ -55,9 +54,13 @@ class UGATIT(object) :
         self.img_size = args.img_size
         self.img_ch = args.img_ch
 
-
-        self.sample_dir = os.path.join(args.sample_dir, self.model_dir)
-        check_folder(self.sample_dir)
+        """ working on dir params """
+        self.train_log_root = args.train_log_root
+        self.checkpoint_dir = args.checkpoint_dir
+        self.result_dir = args.result_dir
+        self.log_dir = args.log_dir
+        self.sample_dir = args.sample_dir
+        self.model_dir = args.model_dir
 
         # self.trainA, self.trainB = prepare_data(dataset_name=self.dataset_name, size=self.img_size
         self.trainA_dataset = glob('./dataset/{}/*.*'.format(self.dataset_name + '/trainA'))
@@ -99,6 +102,76 @@ class UGATIT(object) :
     ##################################################################################
     # Generator
     ##################################################################################
+
+    def check_and_mkdirs(self):
+        from datetime import datetime
+
+        # check and make folders
+        if self.model_dir == '':
+            n_res = str(self.n_res) + 'resblock'
+            n_dis = str(self.n_dis) + 'dis'
+
+            if self.smoothing :
+                smoothing = '_smoothing'
+            else :
+                smoothing = ''
+
+            if self.sn :
+                sn = '_sn'
+            else :
+                sn = ''
+
+            self.model_dir = "{}_{}_{}_{}_{}_{}_{}_{}_{}_{}{}{}".format(self.model_name, self.dataset_name,
+                                                             self.gan_type, n_res, n_dis,
+                                                             self.n_critic,
+                                                             self.adv_weight, self.cycle_weight, self.identity_weight, self.cam_weight, sn, smoothing)
+            # current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if self.checkpoint_dir == "":
+            self.checkpoint_dir = os.path.join(self.train_log_root, self.model_dir)
+        elif '/' not in self.checkpoint_dir:
+            self.checkpoint_dir = os.path.join(self.train_log_root, self.checkpoint_dir, self.model_dir)
+        check_folder(self.checkpoint_dir)
+
+        if self.log_dir == "":
+            self.log_dir = os.path.join(self.train_log_root, self.model_dir, "log")
+        elif '/' not in self.log_dir:
+            self.log_dir = os.path.join(self.train_log_root, self.log_dir, self.model_dir)
+        check_folder(self.log_dir)
+
+        if self.sample_dir == "":
+            self.sample_dir = os.path.join(self.train_log_root, self.model_dir, "samples")
+        elif '/' not in self.sample_dir:
+            self.sample_dir = os.path.join(self.train_log_root, self.sample_dir, self.model_dir)
+        check_folder(os.path.join(self.sample_dir, "imgs"))
+
+        if self.result_dir == "":
+            self.result_dir = os.path.join(self.train_log_root, self.model_dir, "result")
+        elif '/' not in self.result_dir:
+            self.result_dir = os.path.join(self.train_log_root, self.result_dir, self.model_dir)
+        check_folder(os.path.join(self.result_dir))
+
+    def write_args_to_html(self):
+        body = ""
+        for k, v in self.args_dict.items():
+            body = body + "--" + str(k) + " " + str(v) + " \\<br>"
+        with open(self.total_sample_path, 'a') as t_html:
+            t_html.write("python3 main.py \\<br>")
+            t_html.write(body)
+
+    def write_to_html(self, html_path, epoch, idx, img_id):
+        names = ['source', 'output', 'real']
+
+        body = ""
+        for name in names:
+            image_name = '{}_{:02d}_{:06d}_{:02d}.jpg'.format(name, epoch, idx, img_id)
+            body = body + str("<img src=\"" + os.path.join('imgs', image_name) + "\">")
+        body = body + str("<br>")
+
+        with open(html_path, 'a') as v_html:
+            v_html.write(body)
+        with open(self.total_sample_path, 'a') as t_html:
+            t_html.write(body)
 
     def generator(self, x_init, reuse=False, scope="generator"):
         channel = self.ch
@@ -487,6 +560,10 @@ class UGATIT(object) :
 
 
     def train(self):
+        self.check_and_mkdirs()
+        self.total_sample_path = os.path.join(os.path.join(self.sample_dir, "_total_samples.html"))
+        self.write_args_to_html()
+
         # initialize all variables
         tf.global_variables_initializer().run()
 
@@ -494,8 +571,7 @@ class UGATIT(object) :
         self.saver = tf.train.Saver()
 
         # summary writer
-        self.writer = tf.summary.FileWriter(self.log_dir + '/' + self.model_dir, self.sess.graph)
-
+        self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
 
         # restore check-point if it exits
         could_load, checkpoint_counter = self.load(self.checkpoint_dir)
@@ -560,7 +636,6 @@ class UGATIT(object) :
                     self.save(self.checkpoint_dir, counter)
 
 
-
             # After an epoch, start_batch_id is set to zero
             # non-zero value is only for the first epoch after loading pre-trained model
             start_batch_id = 0
@@ -568,29 +643,7 @@ class UGATIT(object) :
             # save model for final step
             self.save(self.checkpoint_dir, counter)
 
-    @property
-    def model_dir(self):
-        n_res = str(self.n_res) + 'resblock'
-        n_dis = str(self.n_dis) + 'dis'
-
-        if self.smoothing :
-            smoothing = '_smoothing'
-        else :
-            smoothing = ''
-
-        if self.sn :
-            sn = '_sn'
-        else :
-            sn = ''
-
-        return "{}_{}_{}_{}_{}_{}_{}_{}_{}_{}{}{}".format(self.model_name, self.dataset_name,
-                                                         self.gan_type, n_res, n_dis,
-                                                         self.n_critic,
-                                                         self.adv_weight, self.cycle_weight, self.identity_weight, self.cam_weight, sn, smoothing)
-
     def save(self, checkpoint_dir, step):
-        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
-
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
 
@@ -598,7 +651,6 @@ class UGATIT(object) :
 
     def load(self, checkpoint_dir):
         print(" [*] Reading checkpoints...")
-        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
 
         ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
         if ckpt and ckpt.model_checkpoint_path:
@@ -612,14 +664,13 @@ class UGATIT(object) :
             return False, 0
 
     def test(self):
+        self.check_and_mkdirs()
         tf.global_variables_initializer().run()
         test_A_files = glob('./dataset/{}/*.*'.format(self.dataset_name + '/testA'))
         test_B_files = glob('./dataset/{}/*.*'.format(self.dataset_name + '/testB'))
 
         self.saver = tf.train.Saver()
         could_load, checkpoint_counter = self.load(self.checkpoint_dir)
-        self.result_dir = os.path.join(self.result_dir, self.model_dir)
-        check_folder(self.result_dir)
 
         if could_load :
             print(" [*] Load SUCCESS")
@@ -628,38 +679,55 @@ class UGATIT(object) :
 
         # write html for visual comparison
         index_path = os.path.join(self.result_dir, 'index.html')
+        img_dir = os.path.join(self.result_dir, 'imgs')
+        if not os.path.exists(img_dir):
+            os.makedirs(img_dir)
+
         index = open(index_path, 'w')
         index.write("<html><body><table><tr>")
         index.write("<th>name</th><th>input</th><th>output</th></tr>")
 
-        for sample_file  in test_A_files : # A -> B
-            print('Processing A image: ' + sample_file)
-            sample_image = np.asarray(load_test_data(sample_file, size=self.img_size))
-            image_path = os.path.join(self.result_dir,'{0}'.format(os.path.basename(sample_file)))
+        for source_path in test_A_files:
+            print('Processing A image: ' + source_path)
+            filename = os.path.basename(source_path)
+            input_filename = 'Source_A_' + filename
+            output_filename = 'Target_B_' + filename
 
-            fake_img = self.sess.run(self.test_fake_B, feed_dict = {self.test_domain_A : sample_image})
-            save_images(fake_img, [1, 1], image_path)
+            shutil.copy(source_path, os.path.join(self.result_dir, 'imgs', input_filename))
 
-            index.write("<td>%s</td>" % os.path.basename(image_path))
+            image = np.asarray(load_test_data(source_path, size=self.img_size))
 
-            index.write("<td><img src='%s' width='%d' height='%d'></td>" % (sample_file if os.path.isabs(sample_file) else (
-                '../..' + os.path.sep + sample_file), self.img_size, self.img_size))
-            index.write("<td><img src='%s' width='%d' height='%d'></td>" % (image_path if os.path.isabs(image_path) else (
-                '../..' + os.path.sep + image_path), self.img_size, self.img_size))
+            fake_image = self.sess.run(self.test_fake_B, feed_dict={self.test_domain_A : image})
+            save_images(fake_image, [1, 1], os.path.join(self.result_dir, 'imgs', output_filename))
+
+            index.write("<td>%s</td>" % filename)
+            index.write(
+                "<td><img src='%s' width='%d' height='%d'></td>" % (
+                'imgs/' + input_filename, self.img_size, self.img_size))
+            index.write(
+                "<td><img src='%s' width='%d' height='%d'></td>" % (
+                'imgs/' + output_filename, self.img_size, self.img_size))
             index.write("</tr>")
 
-        for sample_file  in test_B_files : # B -> A
-            print('Processing B image: ' + sample_file)
-            sample_image = np.asarray(load_test_data(sample_file, size=self.img_size))
-            image_path = os.path.join(self.result_dir,'{0}'.format(os.path.basename(sample_file)))
+        for source_path in test_B_files:
+            print('Processing B image: ' + source_path)
+            filename = os.path.basename(source_path)
+            input_filename = 'Source_B_' + filename
+            output_filename = 'Target_A_' + filename
 
-            fake_img = self.sess.run(self.test_fake_A, feed_dict = {self.test_domain_B : sample_image})
+            shutil.copy(source_path, os.path.join(self.result_dir, 'imgs', input_filename))
 
-            save_images(fake_img, [1, 1], image_path)
-            index.write("<td>%s</td>" % os.path.basename(image_path))
-            index.write("<td><img src='%s' width='%d' height='%d'></td>" % (sample_file if os.path.isabs(sample_file) else (
-                    '../..' + os.path.sep + sample_file), self.img_size, self.img_size))
-            index.write("<td><img src='%s' width='%d' height='%d'></td>" % (image_path if os.path.isabs(image_path) else (
-                    '../..' + os.path.sep + image_path), self.img_size, self.img_size))
+            image = np.asarray(load_test_data(source_path, size=self.img_size))
+
+            fake_image = self.sess.run(self.test_fake_A, feed_dict={self.test_domain_B: image})
+            save_images(fake_image, [1, 1], os.path.join(self.result_dir, 'imgs', output_filename))
+
+            index.write("<td>%s</td>" % filename)
+            index.write(
+                "<td><img src='%s' width='%d' height='%d'></td>" % (
+                    'imgs/' + input_filename, self.img_size, self.img_size))
+            index.write(
+                "<td><img src='%s' width='%d' height='%d'></td>" % (
+                    'imgs/' + output_filename, self.img_size, self.img_size))
             index.write("</tr>")
         index.close()

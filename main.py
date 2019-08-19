@@ -39,14 +39,24 @@ def parse_args():
     parser.add_argument('--img_ch', type=int, default=3, help='The size of image channel')
     parser.add_argument('--augment_flag', type=str2bool, default=True, help='Image augmentation use or not')
 
+    parser.add_argument('--model_dir', type=str, default='',
+                        help='Directory to indicate and contain the training model')
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoint',
-                        help='Directory name to save the checkpoints')
+                        help='Directory to save the checkpoints')
+    parser.add_argument('--train_log_root', type=str, default='',
+                        help='Directory of train log root')
     parser.add_argument('--result_dir', type=str, default='results',
                         help='Directory name to save the generated images')
     parser.add_argument('--log_dir', type=str, default='logs',
-                        help='Directory name to save training logs')
+                        help='Directory to save training logs')
     parser.add_argument('--sample_dir', type=str, default='samples',
                         help='Directory name to save the samples on training')
+
+    parser.add_argument('--skip', type=int, default=0,
+                        help='if 0, no skip in generator, if 1 or 2, two different kinds skip in generator.')
+    parser.add_argument('--restore_partly', type=int, default=0, help='if restore partly')
+    parser.add_argument('--vgg_path', type=str, default=None,
+                        help='Path to vgg19.npy')
 
     return check_args(parser.parse_args())
 
