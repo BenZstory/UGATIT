@@ -16,6 +16,8 @@ class UGATIT(object) :
         else :
             self.model_name = 'UGATIT'
 
+        self.print_heatmap = args.print_heatmap
+
         self.sess = sess
         self.phase = args.phase
         self.dataset_name = args.dataset
@@ -349,14 +351,14 @@ class UGATIT(object) :
     ##################################################################################
 
     def generate_a2b(self, x_A, reuse=False):
-        out, cam, _ = self.generator(x_A, reuse=reuse, scope="generator_B")
+        out, cam, heatmap = self.generator(x_A, reuse=reuse, scope="generator_B")
 
-        return out, cam
+        return out, cam, heatmap
 
     def generate_b2a(self, x_B, reuse=False):
-        out, cam, _ = self.generator(x_B, reuse=reuse, scope="generator_A")
+        out, cam, heatmap = self.generator(x_B, reuse=reuse, scope="generator_A")
 
-        return out, cam
+        return out, cam, heatmap
 
     def discriminate_real(self, x_A, x_B):
         real_A_logit, real_A_cam_logit, _, _ = self.discriminator(x_A, scope="discriminator_A")
@@ -366,9 +368,9 @@ class UGATIT(object) :
 
     def discriminate_fake(self, x_ba, x_ab):
         fake_A_logit, fake_A_cam_logit, _, _ = self.discriminator(x_ba, reuse=True, scope="discriminator_A")
-        fake_B_logit, fake_B_cam_logit, _, _ = self.discriminator(x_ab, reuse=True, scope="discriminator_B")
+        fake_B_logit, fake_B_cam_logit, dis_ab_local_heatmap, dis_ab_global_heatmap = self.discriminator(x_ab, reuse=True, scope="discriminator_B")
 
-        return fake_A_logit, fake_A_cam_logit, fake_B_logit, fake_B_cam_logit
+        return fake_A_logit, fake_A_cam_logit, fake_B_logit, fake_B_cam_logit, dis_ab_local_heatmap, dis_ab_global_heatmap
 
     def gradient_panalty(self, real, fake, scope="discriminator_A"):
         if self.gan_type.__contains__('dragan'):
@@ -436,17 +438,17 @@ class UGATIT(object) :
             self.domain_B = trainB_iterator.get_next()
 
             """ Define Generator, Discriminator """
-            x_ab, cam_ab = self.generate_a2b(self.domain_A) # real a
-            x_ba, cam_ba = self.generate_b2a(self.domain_B) # real b
+            x_ab, cam_ab, heatmap_g_a2b = self.generate_a2b(self.domain_A) # real a
+            x_ba, cam_ba, heatmap_g_b2a = self.generate_b2a(self.domain_B) # real b
 
-            x_aba, _ = self.generate_b2a(x_ab, reuse=True) # real b
-            x_bab, _ = self.generate_a2b(x_ba, reuse=True) # real a
+            x_aba, _, _ = self.generate_b2a(x_ab, reuse=True) # real b
+            x_bab, _, _ = self.generate_a2b(x_ba, reuse=True) # real a
 
-            x_aa, cam_aa = self.generate_b2a(self.domain_A, reuse=True) # fake b
-            x_bb, cam_bb = self.generate_a2b(self.domain_B, reuse=True) # fake a
+            x_aa, cam_aa, _ = self.generate_b2a(self.domain_A, reuse=True) # fake b
+            x_bb, cam_bb, _ = self.generate_a2b(self.domain_B, reuse=True) # fake a
 
             real_A_logit, real_A_cam_logit, real_B_logit, real_B_cam_logit = self.discriminate_real(self.domain_A, self.domain_B)
-            fake_A_logit, fake_A_cam_logit, fake_B_logit, fake_B_cam_logit = self.discriminate_fake(x_ba, x_ab)
+            fake_A_logit, fake_A_cam_logit, fake_B_logit, fake_B_cam_logit, dis_ab_local_heatmap, dis_ab_global_heatmap = self.discriminate_fake(x_ba, x_ab)
 
 
             """ Define Loss """
@@ -554,9 +556,11 @@ class UGATIT(object) :
             self.test_domain_A = tf.placeholder(tf.float32, [1, self.img_size, self.img_size, self.img_ch], name='test_domain_A')
             self.test_domain_B = tf.placeholder(tf.float32, [1, self.img_size, self.img_size, self.img_ch], name='test_domain_B')
 
+            self.test_fake_B, _, self.test_heatmap_a2b = self.generate_a2b(self.test_domain_A)
+            self.test_fake_A, _, self.test_heatmap_b2a = self.generate_b2a(self.test_domain_B)
 
-            self.test_fake_B, _ = self.generate_a2b(self.test_domain_A)
-            self.test_fake_A, _ = self.generate_b2a(self.test_domain_B)
+            if self.print_heatmap:
+                _, _, self.test_heatmap_local_dis_ab, self.test_heatmap_global_dis_ab = self.discriminator(self.test_fake_B, scope="test_discriminator_B")
 
 
     def train(self):
@@ -683,31 +687,87 @@ class UGATIT(object) :
         if not os.path.exists(img_dir):
             os.makedirs(img_dir)
 
+        np_dir = os.path.join(os.path.join(self.result_dir, 'npys'))
+        if not os.path.exists(np_dir):
+            os.makedirs(np_dir)
+
         index = open(index_path, 'w')
         index.write("<html><body><table><tr>")
-        index.write("<th>name</th><th>input</th><th>output</th></tr>")
+        if self.print_heatmap:
+            index.write("<th>name</th><th>input</th><th>output</th> <th>heatmap_G</th> <th>heatmap_D_local</th> <th>heatmap_D_global</th> </tr>")
+            for source_path in test_A_files:
+                print('Processing A image: ' + source_path)
+                filename = os.path.basename(source_path)
+                input_filename = 'Source_A_' + filename
+                output_filename = 'Target_B_' + filename
+                heatmap_G_filename = 'heatmap_G_' + filename
+                heatmap_D_local_filename = 'heatmap_D_local_' + filename
+                heatmap_D_global_filename = 'heatmap_D_global_' + filename
 
-        for source_path in test_A_files:
-            print('Processing A image: ' + source_path)
-            filename = os.path.basename(source_path)
-            input_filename = 'Source_A_' + filename
-            output_filename = 'Target_B_' + filename
+                shutil.copy(source_path, os.path.join(self.result_dir, 'imgs', input_filename))
 
-            shutil.copy(source_path, os.path.join(self.result_dir, 'imgs', input_filename))
+                image = np.asarray(load_test_data(source_path, size=self.img_size))
 
-            image = np.asarray(load_test_data(source_path, size=self.img_size))
+                fake_image, heatmap_G, heatmap_D_local, heatmap_D_global = self.sess.run(
+                    [self.test_fake_B, self.test_heatmap_a2b, self.test_heatmap_local_dis_ab, self.test_heatmap_global_dis_ab],
+                    feed_dict={self.test_domain_A: image})
 
-            fake_image = self.sess.run(self.test_fake_B, feed_dict={self.test_domain_A : image})
-            save_images(fake_image, [1, 1], os.path.join(self.result_dir, 'imgs', output_filename))
+                composed_heatmap_G = superimpose(inverse_transform(image), heatmap_G)
+                save_images(composed_heatmap_G, [1, 1],
+                            os.path.join(self.result_dir, 'imgs', heatmap_G_filename),
+                            inverse=False)
 
-            index.write("<td>%s</td>" % filename)
-            index.write(
-                "<td><img src='%s' width='%d' height='%d'></td>" % (
-                'imgs/' + input_filename, self.img_size, self.img_size))
-            index.write(
-                "<td><img src='%s' width='%d' height='%d'></td>" % (
-                'imgs/' + output_filename, self.img_size, self.img_size))
-            index.write("</tr>")
+                composed_heatmap_D_local = superimpose(inverse_transform(fake_image), heatmap_D_local)
+                save_images(composed_heatmap_D_local, [1, 1],
+                            os.path.join(self.result_dir, 'imgs', heatmap_D_local_filename),
+                            inverse=False)
+
+                composed_heatmap_D_global = superimpose(inverse_transform(fake_image), heatmap_D_global)
+                save_images(composed_heatmap_D_global, [1, 1],
+                            os.path.join(self.result_dir, 'imgs', heatmap_D_global_filename),
+                            inverse=False)
+
+                index.write("<td>%s</td>" % filename)
+                index.write(
+                    "<td><img src='%s' width='%d' height='%d'></td>" % (
+                        'imgs/' + input_filename, self.img_size, self.img_size))
+                index.write(
+                    "<td><img src='%s' width='%d' height='%d'></td>" % (
+                        'imgs/' + output_filename, self.img_size, self.img_size))
+                index.write(
+                    "<td><img src='%s' width='%d' height='%d'></td>" % (
+                        'imgs/' + heatmap_G_filename, self.img_size, self.img_size))
+                index.write(
+                    "<td><img src='%s' width='%d' height='%d'></td>" % (
+                        'imgs/' + heatmap_D_local_filename, self.img_size, self.img_size))
+                index.write(
+                    "<td><img src='%s' width='%d' height='%d'></td>" % (
+                        'imgs/' + heatmap_D_global_filename, self.img_size, self.img_size))
+                index.write("</tr>")
+
+        else:
+            index.write("<th>name</th><th>input</th><th>output</th></tr>")
+            for source_path in test_A_files:
+                print('Processing A image: ' + source_path)
+                filename = os.path.basename(source_path)
+                input_filename = 'Source_A_' + filename
+                output_filename = 'Target_B_' + filename
+
+                shutil.copy(source_path, os.path.join(self.result_dir, 'imgs', input_filename))
+
+                image = np.asarray(load_test_data(source_path, size=self.img_size))
+
+                fake_image = self.sess.run(self.test_fake_B, feed_dict={self.test_domain_A : image})
+                save_images(fake_image, [1, 1], os.path.join(self.result_dir, 'imgs', output_filename))
+
+                index.write("<td>%s</td>" % filename)
+                index.write(
+                    "<td><img src='%s' width='%d' height='%d'></td>" % (
+                    'imgs/' + input_filename, self.img_size, self.img_size))
+                index.write(
+                    "<td><img src='%s' width='%d' height='%d'></td>" % (
+                    'imgs/' + output_filename, self.img_size, self.img_size))
+                index.write("</tr>")
 
         for source_path in test_B_files:
             print('Processing B image: ' + source_path)

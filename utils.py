@@ -25,6 +25,7 @@ class ImageData:
 
         return img
 
+
 def load_test_data(image_path, size=256):
     img = cv2.imread(image_path, flags=cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -36,6 +37,29 @@ def load_test_data(image_path, size=256):
 
     return img
 
+from skimage import exposure
+
+def superimpose(image, heatmap, alpha=0.5, beta=0.5, rescale=True):
+    if len(np.shape(image)) == 4:
+        composed_list = []
+        for i in range(len(image)):
+            composed_list.append(superimpose(image[i], heatmap, alpha, beta, rescale))
+        return np.asarray(composed_list)
+
+    image = np.uint8(image)
+    h, w, c = np.shape(image)
+    heatmap = cv2.resize(heatmap, (w, h))
+
+    if rescale:
+        heatmap = exposure.rescale_intensity(heatmap, out_range=(0, 255))
+    heatmap = np.uint8(heatmap)
+
+    heatmap_img = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
+    composed = cv2.addWeighted(heatmap_img, alpha, image, beta, 0)
+    return composed
+
+
 def augmentation(image, augment_size):
     seed = random.randint(0, 2 ** 31 - 1)
     ori_image_shape = tf.shape(image)
@@ -44,8 +68,11 @@ def augmentation(image, augment_size):
     image = tf.random_crop(image, ori_image_shape, seed=seed)
     return image
 
-def save_images(images, size, image_path):
-    return imsave(inverse_transform(images), size, image_path)
+def save_images(images, size, image_path, inverse=True):
+    if inverse:
+        return imsave(inverse_transform(images), size, image_path)
+    else:
+        return imsave(images, size, image_path)
 
 def inverse_transform(images):
     return ((images+1.) / 2) * 255.0
