@@ -105,53 +105,65 @@ class UGATIT(object) :
     # Generator
     ##################################################################################
 
+    @property
+    def default_model_dir(self):
+        n_res = str(self.n_res) + 'resblock'
+        n_dis = str(self.n_dis) + 'dis'
+
+        if self.smoothing:
+            smoothing = '_smoothing'
+        else:
+            smoothing = ''
+
+        if self.sn:
+            sn = '_sn'
+        else:
+            sn = ''
+
+        return "{}_{}_{}_{}_{}_{}_{}_{}_{}_{}{}{}".format(self.model_name, self.dataset_name,
+                                                            self.gan_type, n_res, n_dis,
+                                                            self.n_critic,
+                                                            self.adv_weight, self.cycle_weight,
+                                                            self.identity_weight, self.cam_weight, sn,
+                                                            smoothing)
+
     def check_and_mkdirs(self):
         from datetime import datetime
 
         # check and make folders
         if self.model_dir == '':
-            n_res = str(self.n_res) + 'resblock'
-            n_dis = str(self.n_dis) + 'dis'
-
-            if self.smoothing :
-                smoothing = '_smoothing'
-            else :
-                smoothing = ''
-
-            if self.sn :
-                sn = '_sn'
-            else :
-                sn = ''
-
-            self.model_dir = "{}_{}_{}_{}_{}_{}_{}_{}_{}_{}{}{}".format(self.model_name, self.dataset_name,
-                                                             self.gan_type, n_res, n_dis,
-                                                             self.n_critic,
-                                                             self.adv_weight, self.cycle_weight, self.identity_weight, self.cam_weight, sn, smoothing)
+            self.model_dir = self.default_model_dir
             # current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         if self.checkpoint_dir == "":
             self.checkpoint_dir = os.path.join(self.train_log_root, self.model_dir)
         elif '/' not in self.checkpoint_dir:
             self.checkpoint_dir = os.path.join(self.train_log_root, self.checkpoint_dir, self.model_dir)
-        check_folder(self.checkpoint_dir)
 
         if self.log_dir == "":
             self.log_dir = os.path.join(self.train_log_root, self.model_dir, "log")
         elif '/' not in self.log_dir:
             self.log_dir = os.path.join(self.train_log_root, self.log_dir, self.model_dir)
-        check_folder(self.log_dir)
 
         if self.sample_dir == "":
             self.sample_dir = os.path.join(self.train_log_root, self.model_dir, "samples")
         elif '/' not in self.sample_dir:
             self.sample_dir = os.path.join(self.train_log_root, self.sample_dir, self.model_dir)
-        check_folder(os.path.join(self.sample_dir, "imgs"))
 
         if self.result_dir == "":
             self.result_dir = os.path.join(self.train_log_root, self.model_dir, "result")
         elif '/' not in self.result_dir:
             self.result_dir = os.path.join(self.train_log_root, self.result_dir, self.model_dir)
-        check_folder(os.path.join(self.result_dir))
+
+        if self.phase in ('train',):
+            check_folder(self.checkpoint_dir)
+            check_folder(self.log_dir)
+
+        if self.phase in ('train', 'test'):
+            check_folder(os.path.join(self.sample_dir, "imgs"))
+
+        if self.phase in ('test', 'export'):
+            check_folder(os.path.join(self.result_dir))
 
     def write_args_to_html(self):
         body = ""
@@ -551,6 +563,12 @@ class UGATIT(object) :
             self.G_loss = tf.summary.merge(g_summary_list)
             self.D_loss = tf.summary.merge(d_summary_list)
 
+        elif self.phase == 'export':
+            """ Export a serving model of domainA to domainB"""
+            self.input_domain_A = tf.placeholder(tf.float32, [1, self.img_size, self.img_size, self.img_ch], name='input_domain_A')
+            self.predict_domain_B, _, _ = self.generate_a2b(self.input_domain_A)
+            self.predict_result = tf.identity(self.predict_domain_B, name="predict_result")
+
         else :
             """ Test """
             self.test_domain_A = tf.placeholder(tf.float32, [1, self.img_size, self.img_size, self.img_ch], name='test_domain_A')
@@ -791,3 +809,39 @@ class UGATIT(object) :
                     'imgs/' + output_filename, self.img_size, self.img_size))
             index.write("</tr>")
         index.close()
+
+    def export(self):
+        self.check_and_mkdirs()
+        tf.global_variables_initializer().run()
+
+        self.saver = tf.train.Saver()
+        could_load, checkpoint_counter = self.load(self.checkpoint_dir)
+
+        if could_load:
+            print(" [*] Load SUCCESS")
+        else:
+            print(" [!] Load failed...")
+
+        export_dir = os.path.join(self.result_dir, 'export', str(int(time.time())))
+        if os.path.exists(export_dir):
+            shutil.rmtree(export_dir)
+        builder = tf.saved_model.builder.SavedModelBuilder(export_dir)
+
+        model_signature = tf.saved_model.signature_def_utils.build_signature_def(
+            inputs={
+                "input_images": tf.saved_model.utils.build_tensor_info(self.input_domain_A)
+            },
+            outputs={
+                "predict_image": tf.saved_model.utils.build_tensor_info(self.predict_result)
+            },
+            method_name=tf.saved_model.signature_constants.PREDICT_METHOD_NAME)
+
+        builder.add_meta_graph_and_variables(
+            self.sess, [tf.saved_model.tag_constants.SERVING],
+            signature_def_map={
+                tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY:
+                    model_signature,
+            },
+            clear_devices=True
+        )
+        builder.save()

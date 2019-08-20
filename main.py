@@ -7,7 +7,7 @@ from utils import *
 def parse_args():
     desc = "Tensorflow implementation of U-GAT-IT"
     parser = argparse.ArgumentParser(description=desc)
-    parser.add_argument('--phase', type=str, default='train', help='[train / test]')
+    parser.add_argument('--phase', type=str, default='train', help='[train / test / export]')
     parser.add_argument('--light', type=str2bool, default=False, help='[U-GAT-IT full version / U-GAT-IT light version]')
     parser.add_argument('--dataset', type=str, default='selfie2anime', help='dataset_name')
     parser.add_argument('--print_heatmap', type=str2bool, default=False, help='If print heatmap while saving samples or testing')
@@ -112,6 +112,10 @@ def main():
         if args.phase == 'test' :
             gan.test()
             print(" [*] Test finished!")
+
+        if args.phase == 'export' :
+            gan.export()
+            print(" [*] Export finished!")
 
 if __name__ == '__main__':
     main()
